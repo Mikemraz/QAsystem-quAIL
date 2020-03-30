@@ -3,15 +3,37 @@ from util import make_stitched_data, QADataset
 import pickle
 from torch.utils.data import DataLoader
 
+"""
+The structure of quAIL training dataset:
+
+{'version': <str>,
+'data': 
+    'u001':
+        'author': <str>
+        'title': <str>
+        'context': <str>
+        'questions':
+            'u001_0':
+                'question': <str>
+                'answers':
+                    '0': <str>
+                    '1': <str>
+                    '2': <str>
+                    '3': <str>}
+"""
 
 train_stitched_data_file_name = 'train_stitched_data.txt'
 dev_stitched_data_file_name = 'dev_stitched_data.txt'
 
 f_list = os.listdir()
 if train_stitched_data_file_name not in f_list:
-    make_stitched_data(file_name=train_stitched_data_file_name)
+    questions_file_name = './data/quAIL/train_questions.json'
+    key_file_name = './data/quAIL/train_key.json'
+    make_stitched_data(questions_file_name,key_file_name,train_stitched_data_file_name)
 if dev_stitched_data_file_name not in f_list:
-    make_stitched_data(file_name=dev_stitched_data_file_name)
+    questions_file_name = './data/quAIL/dev_questions.json'
+    key_file_name = './data/quAIL/new_dev_key.json'
+    make_stitched_data(questions_file_name, key_file_name, dev_stitched_data_file_name)
 
 with open(train_stitched_data_file_name, 'rb') as f:
     train_data = pickle.load(f)
@@ -37,21 +59,3 @@ for batch in dataloader_dev:
     print(batch)
     break
 
-"""
-The structure of quAIL training dataset:
-
-{'version': <str>,
-'data': 
-    'u001':
-        'author': <str>
-        'title': <str>
-        'context': <str>
-        'questions':
-            'u001_0':
-                'question': <str>
-                'answers':
-                    '0': <str>
-                    '1': <str>
-                    '2': <str>
-                    '3': <str>}
-"""

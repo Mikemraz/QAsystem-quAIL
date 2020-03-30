@@ -15,10 +15,10 @@ def preprocess(data):
     tokens = word_tokenize(data)
     return tokens
 
-def make_stitched_data(file_name='stitched_data.txt'):
-    with open('./data/quAIL/train_questions.json', 'rb') as f:
+def make_stitched_data(questions_file_name,key_file_name,save_file_name):
+    with open(questions_file_name, 'rb') as f:
         data = json.load(f)
-    with open('./data/quAIL/train_key.json', 'rb') as f:
+    with open(key_file_name, 'rb') as f:
         labels = json.load(f)
     stitched_data = []
     artical_list = list(data['data'].keys())
@@ -37,7 +37,7 @@ def make_stitched_data(file_name='stitched_data.txt'):
             data_point = preprocess(context) + ['<q>'] + preprocess(q) + ['<0>'] + preprocess(option_0) + \
                          ['<1>'] + preprocess(option_1) + ['<2>'] + preprocess(option_2) + ['<3>'] + preprocess(option_3)
             stitched_data.append([data_point,label])
-    with open(file_name, 'wb') as f:
+    with open(save_file_name, 'wb') as f:
         pickle.dump(stitched_data, f)
 
 class Vocabulary:
