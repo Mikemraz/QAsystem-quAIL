@@ -1,5 +1,10 @@
 import json
 
+"""
+the format of dev_key.json file is not the same as train_key.json. So we make a new file named new_dev_key.json that makes
+our life easier.
+"""
+
 save_to_file = '../data/quAIL/new_dev_key.json'
 dev_key_file = '../data/quAIL/dev_key.json'
 with open(dev_key_file, 'rb') as f:

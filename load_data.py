@@ -1,5 +1,5 @@
 import os
-from util import make_stitched_data, QADataset
+from utils.util import make_stitched_data, QADataset
 import pickle
 from torch.utils.data import DataLoader
 
@@ -25,6 +25,7 @@ The structure of quAIL training dataset:
 train_stitched_data_file_name = 'train_stitched_data.txt'
 dev_stitched_data_file_name = 'dev_stitched_data.txt'
 
+# create stitched data if they do not exist.
 f_list = os.listdir()
 if train_stitched_data_file_name not in f_list:
     questions_file_name = './data/quAIL/train_questions.json'
@@ -35,6 +36,7 @@ if dev_stitched_data_file_name not in f_list:
     key_file_name = './data/quAIL/new_dev_key.json'
     make_stitched_data(questions_file_name, key_file_name, dev_stitched_data_file_name)
 
+# load stitched data
 with open(train_stitched_data_file_name, 'rb') as f:
     train_data = pickle.load(f)
 with open(dev_stitched_data_file_name, 'rb') as f:
@@ -48,9 +50,11 @@ train_labels = [label for quiz,label in train_data]
 dev_texts =[quiz for quiz,label in dev_data]
 dev_labels = [label for quiz,label in dev_data]
 
+# build standard Pytorch Dataset object of our data
 dataset_train = QADataset(train_texts,train_labels,max_len=max_quiz_length)
 dataset_dev = QADataset(dev_texts,dev_labels,vocab=dataset_train.vocab,labels_vocab=dataset_train.labels_vocab,max_len=max_quiz_length)
 
+# build standard Pytorch DataLoader object of our data
 dataloader_train = DataLoader(dataset_train,shuffle=True,batch_size=64)
 dataloader_dev = DataLoader(dataset_dev,shuffle=True,batch_size=64)
 
