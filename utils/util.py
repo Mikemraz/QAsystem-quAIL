@@ -1,5 +1,4 @@
 import json
-import pickle
 import itertools
 from collections import defaultdict, Counter
 import numpy as np
@@ -7,6 +6,10 @@ from nltk import word_tokenize
 import torch
 from torch.utils.data import Dataset
 import torch.nn.functional as F
+
+import os
+import pickle
+
 
 def preprocess(data):
     """
@@ -17,7 +20,7 @@ def preprocess(data):
     tokens = word_tokenize(data)
     return tokens
 
-def make_stitched_data(questions_file_name,key_file_name,save_file_name):
+def process_data(questions_file_name,key_file_name,save_file_name):
     with open(questions_file_name, 'rb') as f:
         data = json.load(f)
     with open(key_file_name, 'rb') as f:
@@ -36,9 +39,10 @@ def make_stitched_data(questions_file_name,key_file_name,save_file_name):
             option_2 = quiz['answers']['2']
             option_3 = quiz['answers']['3']
             label = '<' + labels['data'][quiz_idx] + '>'
-            data_point = preprocess(context) + ['<q>'] + preprocess(q) + ['<0>'] + preprocess(option_0) + \
-                         ['<1>'] + preprocess(option_1) + ['<2>'] + preprocess(option_2) + ['<3>'] + preprocess(option_3)
-            stitched_data.append([data_point,label])
+            paragraph = preprocess(context)
+            q_and_a =  ['<q>'] + preprocess(q) + ['<0>'] + preprocess(option_0) + \
+                       ['<1>'] + preprocess(option_1) + ['<2>'] + preprocess(option_2) + ['<3>'] + preprocess(option_3)
+            stitched_data.append([[paragraph,q_and_a],label])
     with open(save_file_name, 'wb') as f:
         pickle.dump(stitched_data, f)
 
@@ -87,50 +91,39 @@ class Vocabulary:
 
 
 class QADataset(Dataset):
-    def __init__(self, texts, labels, vocab=None, labels_vocab=None, max_len=40, lowercase=True):
+    def __init__(self, texts, labels, vocab=None, labels_vocab=None, parag_max_len=40, q_and_a_max_len=40, lowercase=True):
         """
         Args:
-            texts (list): tokenized inputs
+            texts (list): tokenized inputs, with format [paragraph, q_and_a]
             labels (list of str): the correponding labels of the dataset examples
             vocab (MyVocabulary, optional): vocabular to convert text to indices. If not provided, will be created based on the texts
             labels_vocab (MyVocabulary, optional): vocabular to convert labels to indices. If not provided, will be created based on the labels
-            max_len (int): maximum length of the text. Texts shorter than max_len will be cut at the end
+            parag_max_len (int): maximum length of the paragraph. Texts shorter than parag_max_len will be cut at the end
+            q_and_a_max_len (int): maximum length of the q_and_a(question and answers combination). Texts shorter than q_and_a_max_len will be cut at the end
             lowercase (bool, optional): a fag specifying whether or not the input text should be lowercased
         """
 
-        self.max_len = max_len
+        self.parag_max_len = parag_max_len
+        self.q_and_a_max_len = q_and_a_max_len
         self.lowercase = lowercase
 
-        self.texts = [self._preprocess(t) for t in texts]
+        self.parag = [self._pad(parag,is_parag=True) for parag,q_and_a in texts]
+        self.q_and_a = [self._pad(q_and_a,is_parag=False) for parag,q_and_a in texts]
         self.labels = labels
 
         if vocab is None:
             vocab = Vocabulary(['<PAD>', '<UNK>', '<q>', '<0>', '<1>', '<2>', '<3>'])
-            vocab.add_tokens(itertools.chain.from_iterable(self.texts))
+            vocab.add_tokens(itertools.chain.from_iterable(self.parag))
+            vocab.add_tokens(itertools.chain.from_iterable(self.q_and_a))
 
         if labels_vocab is None:
             labels_vocab = Vocabulary()
-            labels_vocab.add_tokens(labels)
+            labels_vocab.add_tokens(self.labels)
 
         self.vocab = vocab
         self.labels_vocab = labels_vocab
 
-
-    def _preprocess(self, text):
-        """
-        Preprocess a give dataset example
-        Args:
-            text (list): given dataset example
-            max_len (int, optional): maximum sequence length
-        Returns:
-            a list of tokens for a given text span
-        """
-        # cut the list of tokens to `max_len` if needed
-        tokens = self._pad(text)
-        return tokens
-
-
-    def _pad(self, tokens):
+    def _pad(self, tokens, is_parag=True):
         """
         Pad tokens to self.max_len
         Args:
@@ -141,7 +134,10 @@ class QADataset(Dataset):
         """
         # pad the list of tokens to be exactly of the `max_len` size
         ### YOUR CODE BELOW ###
-        max_len = self.max_len
+        if is_parag:
+            max_len = self.parag_max_len
+        else:
+            max_len = self.q_and_a_max_len
         if len(tokens) >= max_len:
             tokens = tokens[:max_len]
         else:
@@ -152,7 +148,7 @@ class QADataset(Dataset):
 
     def __getitem__(self, idx):
         """
-        Given an index, return a formatted dataset example
+        Given an index, return a indexed dataset example
 
         Args:
             idx (int): dataset index
@@ -161,16 +157,18 @@ class QADataset(Dataset):
             tuple: a tuple of token_ids based on the vocabulary mapping  and a corresponding label
         """
         ### YOUR CODE BELOW ###
-        tokens = self.texts[idx]
-        tokens = np.array([self.vocab[token] if token in self.vocab else self.vocab['<UNK>'] for token in tokens],
+        parag, q_and_a = self.parag[idx], self.q_and_a[idx]
+        parag_tokens = np.array([self.vocab[token] if token in self.vocab else self.vocab['<UNK>'] for token in parag],
+                          dtype=np.int64)
+        q_and_a_tokens = np.array([self.vocab[token] if token in self.vocab else self.vocab['<UNK>'] for token in q_and_a],
                           dtype=np.int64)
         label = self.labels[idx]
         label = self.labels_vocab[label]
         ### YOUR CODE ABOVE ###
-        return tokens, label
+        return parag_tokens, q_and_a_tokens, label
 
     def __len__(self):
-        return len(self.texts)
+        return len(self.parag)
 
 
 def masked_softmax(logits, mask, dim=-1, log_softmax=False):
@@ -192,3 +190,149 @@ def masked_softmax(logits, mask, dim=-1, log_softmax=False):
     probs = softmax_fn(masked_logits, dim)
 
     return probs
+
+def torch_from_json(path, dtype=torch.float32):
+    """Load a PyTorch Tensor from a JSON file.
+    Args:
+        path (str): Path to the JSON file to load.
+        dtype (torch.dtype): Data type of loaded array.
+    Returns:
+        tensor (torch.Tensor): Tensor loaded from JSON file.
+    """
+    with open(path, 'r') as fh:
+        array = np.array(json.load(fh))
+
+    tensor = torch.from_numpy(array).type(dtype)
+
+    return tensor
+
+
+def get_dataset():
+    """
+    The structure of quAIL training dataset:
+
+    {'version': <str>,
+    'data':
+        'u001':
+            'author': <str>
+            'title': <str>
+            'context': <str>
+            'questions':
+                'u001_0':
+                    'question': <str>
+                    'answers':
+                        '0': <str>
+                        '1': <str>
+                        '2': <str>
+                        '3': <str>}
+    """
+    train_processed_data_file_name = 'train_processed_data.txt'
+    dev_processed_data_file_name = 'dev_processed_data.txt'
+
+    # create stitched data if they do not exist.
+    f_list = os.listdir()
+    if train_processed_data_file_name not in f_list:
+        questions_file_name = './data/quAIL/train_questions.json'
+        key_file_name = './data/quAIL/train_key.json'
+        process_data(questions_file_name, key_file_name, train_processed_data_file_name)
+    if dev_processed_data_file_name not in f_list:
+        questions_file_name = './data/quAIL/dev_questions.json'
+        key_file_name = './data/quAIL/new_dev_key.json'
+        process_data(questions_file_name, key_file_name, dev_processed_data_file_name)
+
+    # load stitched data
+    with open(train_processed_data_file_name, 'rb') as f:
+        train_data = pickle.load(f)
+    with open(dev_processed_data_file_name, 'rb') as f:
+        dev_data = pickle.load(f)
+
+    parag_length_list = [len(example[0]) for example, label in train_data]
+    max_parag_length = max(parag_length_list)
+    q_and_a_length_list = [len(example[1]) for example, label in train_data]
+    max_q_and_a_length = max(q_and_a_length_list)
+
+    train_texts = [example for example, label in train_data]
+    train_labels = [label for quiz, label in train_data]
+    dev_texts = [quiz for quiz, label in dev_data]
+    dev_labels = [label for quiz, label in dev_data]
+
+    # build standard Pytorch Dataset object of our data
+    dataset_train = QADataset(train_texts, train_labels, parag_max_len=max_parag_length,
+                              q_and_a_max_len=max_q_and_a_length)
+    dataset_dev = QADataset(dev_texts, dev_labels, vocab=dataset_train.vocab, labels_vocab=dataset_train.labels_vocab,
+                            parag_max_len=max_parag_length, q_and_a_max_len=max_q_and_a_length)
+
+
+    return dataset_train, dataset_dev
+
+
+class EMA:
+    """Exponential moving average of model parameters.
+    Args:
+        model (torch.nn.Module): Model with parameters whose EMA will be kept.
+        decay (float): Decay rate for exponential moving average.
+    """
+    def __init__(self, model, decay):
+        self.decay = decay
+        self.shadow = {}
+        self.original = {}
+
+        # Register model parameters
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def __call__(self, model, num_updates):
+        decay = min(self.decay, (1.0 + num_updates) / (10.0 + num_updates))
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                assert name in self.shadow
+                new_average = \
+                    (1.0 - decay) * param.data + decay * self.shadow[name]
+                self.shadow[name] = new_average.clone()
+
+    def assign(self, model):
+        """Assign exponential moving average of parameter values to the
+        respective parameters.
+        Args:
+            model (torch.nn.Module): Model to assign parameter values.
+        """
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                assert name in self.shadow
+                self.original[name] = param.data.clone()
+                param.data = self.shadow[name]
+
+    def resume(self, model):
+        """Restore original parameters to a model. That is, put back
+        the values that were in each parameter at the last call to `assign`.
+        Args:
+            model (torch.nn.Module): Model to assign parameter values.
+        """
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                assert name in self.shadow
+                param.data = self.original[name]
+
+
+def load_model(model, checkpoint_path, device, return_step=True):
+    """Load model parameters from disk.
+    Args:
+        model (torch.nn.DataParallel): Load parameters into this model.
+        checkpoint_path (str): Path to checkpoint to load.
+        gpu_ids (list): GPU IDs for DataParallel.
+        return_step (bool): Also return the step at which checkpoint was saved.
+    Returns:
+        model (torch.nn.DataParallel): Model loaded from checkpoint.
+        step (int): Step at which checkpoint was saved. Only if `return_step`.
+    """
+    ckpt_dict = torch.load(checkpoint_path, map_location=device)
+
+    # Build model, load parameters
+    model.load_state_dict(ckpt_dict['model_state'])
+
+    if return_step:
+        step = ckpt_dict['step']
+        return model, step
+
+    return model

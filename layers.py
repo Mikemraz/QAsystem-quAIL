@@ -20,19 +20,16 @@ class Embedding(nn.Module):
         hidden_size (int): Size of hidden activations.
         drop_prob (float): Probability of zero-ing out activations
     """
-    def __init__(self, word_vectors, hidden_size, drop_prob):
-        super(Embedding, self).__init__()
-        self.drop_prob = drop_prob
-        self.embed = nn.Embedding.from_pretrained(word_vectors)
-        self.proj = nn.Linear(word_vectors.size(1), hidden_size, bias=False)
+    def __init__(self, embedding_size, vocab_size, hidden_size):
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, embedding_size)
+        self.proj = nn.Linear(embedding_size, hidden_size, bias=False)
         self.hwy = HighwayEncoder(2, hidden_size)
 
     def forward(self, x):
         emb = self.embed(x)   # (batch_size, seq_len, embed_size)
-        emb = F.dropout(emb, self.drop_prob, self.training)
         emb = self.proj(emb)  # (batch_size, seq_len, hidden_size)
         emb = self.hwy(emb)   # (batch_size, seq_len, hidden_size)
-
         return emb
 
 
@@ -95,7 +92,7 @@ class RNNEncoder(nn.Module):
         x = pack_padded_sequence(x, lengths, batch_first=True)
 
         # Apply RNN
-        x, _ = self.rnn(x)  # (batch_size, seq_len, 2 * hidden_size)
+        x, (h_n,c_n) = self.rnn(x)  # (batch_size, seq_len, 2 * hidden_size)
 
         # Unpack and reverse sort
         x, _ = pad_packed_sequence(x, batch_first=True, total_length=orig_len)
@@ -105,7 +102,7 @@ class RNNEncoder(nn.Module):
         # Apply dropout (RNN applies dropout after all but the last layer)
         x = F.dropout(x, self.drop_prob, self.training)
 
-        return x
+        return x, h_n
 
 
 class BiDAFAttention(nn.Module):
@@ -183,27 +180,30 @@ class BiDAFOutput(nn.Module):
         hidden_size (int): Hidden size used in the BiDAF model.
         drop_prob (float): Probability of zero-ing out activations.
     """
-    def __init__(self, hidden_size, drop_prob):
+    # def __init__(self, hidden_size, parag_length=494, num_cls=4):
+    #     super(BiDAFOutput, self).__init__()
+    #     self.att_linear = nn.Linear(8 * hidden_size, 1)
+    #     self.mod_linear = nn.Linear(2 * hidden_size, 1)
+    #
+    #     self.linear = nn.Linear(parag_length, num_cls)
+    #
+    # def forward(self, att, mod):
+    #     # att Dim: (batch_size, parag_len, 8*hidden_size)
+    #     logits = self.att_linear(att) + self.mod_linear(mod) #dim(batch,parag,1)
+    #     logits = logits.squeeze() #dim(batch,parag)
+    #     logits = self.linear(logits) #dim(batch,num_cls)
+    #     #p = self.softmax(logits)
+    #
+    #     return logits
+
+    def __init__(self, hidden_size, num_cls=4):
         super(BiDAFOutput, self).__init__()
-        self.att_linear_1 = nn.Linear(8 * hidden_size, 1)
-        self.mod_linear_1 = nn.Linear(2 * hidden_size, 1)
+        self.mod_linear = nn.Linear(hidden_size, num_cls)
 
-        self.rnn = RNNEncoder(input_size=2 * hidden_size,
-                              hidden_size=hidden_size,
-                              num_layers=1,
-                              drop_prob=drop_prob)
+    def forward(self, h_n):
+        # att Dim: (batch_size, parag_len, 8*hidden_size)
+        h_n = h_n.permute(1, 0, 2)
+        h_n = torch.sum(h_n,1)
+        logits = self.mod_linear(h_n) #dim(batch,num_cls)
 
-        self.att_linear_2 = nn.Linear(8 * hidden_size, 1)
-        self.mod_linear_2 = nn.Linear(2 * hidden_size, 1)
-
-    def forward(self, att, mod, mask):
-        # Shapes: (batch_size, seq_len, 1)
-        logits_1 = self.att_linear_1(att) + self.mod_linear_1(mod)
-        mod_2 = self.rnn(mod, mask.sum(-1))
-        logits_2 = self.att_linear_2(att) + self.mod_linear_2(mod_2)
-
-        # Shapes: (batch_size, seq_len)
-        log_p1 = masked_softmax(logits_1.squeeze(), mask, log_softmax=True)
-        log_p2 = masked_softmax(logits_2.squeeze(), mask, log_softmax=True)
-
-        return log_p1, log_p2
+        return logits
