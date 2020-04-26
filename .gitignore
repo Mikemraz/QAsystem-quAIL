@@ -4,3 +4,7 @@ __pycache__
 .texpadtmp/
 data/
 save/
+dev_processed_data.txt
+dev_processed_data_race.txt
+train_processed_data.txt
+train_processed_data_race.txt

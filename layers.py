@@ -2,12 +2,14 @@
 Author:
     Chris Chute (chute@stanford.edu)
 """
-
+import math
 import torch
+from torch.nn import Parameter
 import torch.nn as nn
 import torch.nn.functional as F
-
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+from allennlp.modules import TimeDistributed
+
 from utils.util import masked_softmax
 
 
@@ -167,6 +169,127 @@ class BiDAFAttention(nn.Module):
         s = s0 + s1 + s2 + self.bias
 
         return s
+
+
+class TriLinearAttention(nn.Module):
+    """
+    This function is taken from Allen NLP group, refer to github:
+    https://github.com/chrisc36/allennlp/blob/346e294a5bab1ec0d8f2af962cfe44abc450c369/allennlp/modules/tri_linear_attention.py
+
+    TriLinear attention as used by BiDaF, this is less flexible more memory efficient then
+    the `linear` implementation since we do not create a massive
+    (batch, context_len, question_len, dim) matrix
+    """
+
+    def __init__(self, input_dim):
+        super().__init__()
+        self.input_dim = input_dim
+        self._x_weights = Parameter(torch.Tensor(input_dim, 1))
+        self._y_weights = Parameter(torch.Tensor(input_dim, 1))
+        self._dot_weights = Parameter(torch.Tensor(1, 1, input_dim))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        std = math.sqrt(6 / (self.input_dim * 3 + 1))
+        self._y_weights.data.uniform_(-std, std)
+        self._x_weights.data.uniform_(-std, std)
+        self._dot_weights.data.uniform_(-std, std)
+
+    def forward(self, matrix_1, matrix_2):
+        # pylint: disable=arguments-differ
+
+        # Each matrix is (batch_size, time_i, input_dim)
+        batch_dim = matrix_1.shape[0]
+        time_1 = matrix_1.shape[1]
+        time_2 = matrix_2.shape[1]
+
+        # (batch * time1, dim) * (dim, 1) -> (batch * time1, 1)
+        x_factors = torch.matmul(matrix_1.resize(batch_dim * time_1, self.input_dim), self._x_weights)
+        x_factors = x_factors.contiguous().view(batch_dim, time_1, 1)  # ->  (batch, time1, 1)
+
+        # (batch * time2, dim) * (dim, 1) -> (batch * tim2, 1)
+        y_factors = torch.matmul(matrix_2.resize(batch_dim * time_2, self.input_dim), self._y_weights)
+        y_factors = y_factors.contiguous().view(batch_dim, 1, time_2)  # ->  (batch, 1, time2)
+
+        weighted_x = matrix_1 * self._dot_weights  # still (batch, time1, dim)
+
+        matrix_2_t = torch.transpose(matrix_2, 1, 2)  # -> (batch, dim, time2)
+
+        # Batch multiplication,
+        # (batch, time1, dim), (batch, dim, time2) -> (batch, time1, time2)
+        dot_factors = torch.matmul(weighted_x, matrix_2_t)
+
+        # Broadcasting will correctly repeat the x/y factors as needed,
+        # result is (batch, time1, time2)
+        return dot_factors + x_factors + y_factors
+
+
+class SelfAtt(nn.Module):
+    """
+        The self attention layer is implemented by Gendong Zhang, with the function TimeDistributed provided by Allen NLP.
+        The self attention get the attention score of cotext and context.
+        Refer to : https://github.com/Oceanland-428/Improved-BiDAF-with-Self-Attention#overview
+        Args:
+            hidden_size (int): Size of hidden activations.
+            drop_prob (float): Probability of zero-ing out activations
+    """
+
+    def __init__(self, hidden_size, drop_prob):
+        super(SelfAtt, self).__init__()
+
+        self.drop_prob = drop_prob
+        self.att_wrapper = TimeDistributed(nn.Linear(hidden_size * 4, hidden_size))
+        self.trilinear = TriLinearAttention(hidden_size)
+        self.self_att_upsampler = TimeDistributed(nn.Linear(hidden_size * 3, hidden_size * 4))
+        self.enc = nn.GRU(hidden_size, hidden_size // 2, 1,
+                          batch_first=True,
+                          bidirectional=True)
+        self.hidden_size = hidden_size
+
+    def forward(self, att, c_mask):
+        # (batch_size, c_len, 1600)
+        att_copy = att.clone()  # To save the original data of attention from pervious layer.
+        # (batch_size * c_len, 1600)
+        att_wrapped = self.att_wrapper(
+            att)  # unroll the second dimention with the first dimension, and roll it back, change of dimension.
+        # non-linearity activation function
+        att = F.relu(att_wrapped)  # (batch_size * c_len, 1600)
+        #         print("att", att.shape)
+        c_mask = c_mask.unsqueeze(dim=2).float()  # (batch_size, c_len, 1)
+
+        drop_att = F.dropout(att, self.drop_prob, self.training)  # (batch_size * c_len, hidden_size)
+        #         c_mask = c_mask.permute(1, 0, 2)
+        #         print(drop_att.shape, c_mask.shape)
+
+        encoder, _ = self.enc(drop_att)
+        #         encoder = self.get_similarity_matrix(drop_att, c_mask)
+        #         print("encoder", encoder.shape)
+        #         encoder = encoder.unsqueeze(dim=3)
+
+        self_att = self.trilinear(encoder, encoder)  # get the self attention (batch_size, c_len, c_len)
+
+        # to match the shape of the attention matrix
+        mask = (c_mask.view(c_mask.shape[0], c_mask.shape[1], 1) * c_mask.view(c_mask.shape[0], 1, c_mask.shape[1]))
+        identity = torch.eye(c_mask.shape[1], c_mask.shape[1]).cuda().view(1, c_mask.shape[1], c_mask.shape[1])
+        mask = mask * (1 - identity)
+
+        # get the self attention vector features
+        self_att_softmax = masked_softmax(self_att, mask, log_softmax=False)
+        self_att_vector = torch.matmul(self_att_softmax, encoder)
+
+        # concatenate to make the shape (batch, c_len, 1200)
+        conc = torch.cat((self_att_vector, encoder, encoder * self_att_vector), dim=-1)
+        #         print("conc", conc.shape)
+
+        # To match with the input attention, we have to upsample the hidden_size from 1200 to 1600.
+        upsampler = self.self_att_upsampler(conc)
+        out = F.relu(upsampler)
+
+        # (batch_size, c_len, 1600)
+        att_copy += out
+
+        att = F.dropout(att_copy, self.drop_prob, self.training)
+        return att
 
 
 class BiDAFOutput(nn.Module):

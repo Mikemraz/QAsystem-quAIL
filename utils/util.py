@@ -20,7 +20,7 @@ def preprocess(data):
     tokens = word_tokenize(data)
     return tokens
 
-def process_data(questions_file_name,key_file_name,save_file_name):
+def process_data_quail(questions_file_name,key_file_name,save_file_name):
     with open(questions_file_name, 'rb') as f:
         data = json.load(f)
     with open(key_file_name, 'rb') as f:
@@ -45,6 +45,42 @@ def process_data(questions_file_name,key_file_name,save_file_name):
             stitched_data.append([[paragraph,q_and_a],label])
     with open(save_file_name, 'wb') as f:
         pickle.dump(stitched_data, f)
+
+def process_data_race(data_path, save_file_name):
+    stitched_data = []
+    for type in ['middle/','high/']:
+        new_data_path = data_path + type
+        artical_list = os.listdir(new_data_path)
+        for artical in artical_list:
+            artical_path = new_data_path + artical
+            with open(artical_path, 'rb') as f:
+                data = json.load(f)
+            num_of_q = len(data['answers'])
+            parag = data['article']
+            parag = preprocess(parag)
+            for i in range(num_of_q):
+                label = data['answers'][i]
+                if label=='A':
+                    label = '<0>'
+                elif label=='B':
+                    label = '<1>'
+                elif label=='C':
+                    label = '<2>'
+                elif label=='D':
+                    label = '<3>'
+                options = data['options'][i]
+                question = data['questions'][i]
+                option_0 = options[0]
+                option_1 = options[1]
+                option_2 = options[2]
+                option_3 = options[3]
+                q_and_a = ['<q>'] + preprocess(question) + ['<0>'] + preprocess(option_0) + \
+                          ['<1>'] + preprocess(option_1) + ['<2>'] + preprocess(option_2) + ['<3>'] + preprocess(
+                    option_3)
+                stitched_data.append([[parag, q_and_a], label])
+    with open(save_file_name, 'wb') as f:
+        pickle.dump(stitched_data, f)
+
 
 class Vocabulary:
     def __init__(self, special_tokens=None):
@@ -207,7 +243,7 @@ def torch_from_json(path, dtype=torch.float32):
     return tensor
 
 
-def get_dataset():
+def get_dataset_quail():
     """
     The structure of quAIL training dataset:
 
@@ -234,11 +270,11 @@ def get_dataset():
     if train_processed_data_file_name not in f_list:
         questions_file_name = './data/quAIL/train_questions.json'
         key_file_name = './data/quAIL/train_key.json'
-        process_data(questions_file_name, key_file_name, train_processed_data_file_name)
+        process_data_quail(questions_file_name, key_file_name, train_processed_data_file_name)
     if dev_processed_data_file_name not in f_list:
         questions_file_name = './data/quAIL/dev_questions.json'
         key_file_name = './data/quAIL/new_dev_key.json'
-        process_data(questions_file_name, key_file_name, dev_processed_data_file_name)
+        process_data_quail(questions_file_name, key_file_name, dev_processed_data_file_name)
 
     # load stitched data
     with open(train_processed_data_file_name, 'rb') as f:
@@ -262,9 +298,40 @@ def get_dataset():
     dataset_dev = QADataset(dev_texts, dev_labels, vocab=dataset_train.vocab, labels_vocab=dataset_train.labels_vocab,
                             parag_max_len=max_parag_length, q_and_a_max_len=max_q_and_a_length)
 
-
     return dataset_train, dataset_dev
 
+def get_dataset_race():
+    train_path = './data/RACE/train/'
+    dev_path = './data/RACE/dev/'
+    train_processed_data_file_name = 'train_processed_data_race.txt'
+    dev_processed_data_file_name = 'dev_processed_data_race.txt'
+    f_list = os.listdir()
+    if train_processed_data_file_name not in f_list:
+        process_data_race(train_path, train_processed_data_file_name)
+    if dev_processed_data_file_name not in f_list:
+        process_data_race(dev_path, dev_processed_data_file_name)
+    # load stitched data
+    with open(train_processed_data_file_name, 'rb') as f:
+        train_data = pickle.load(f)
+    with open(dev_processed_data_file_name, 'rb') as f:
+        dev_data = pickle.load(f)
+    parag_length_list = [len(example[0]) for example, label in train_data]
+    max_parag_length = max(parag_length_list)
+    q_and_a_length_list = [len(example[1]) for example, label in train_data]
+    max_q_and_a_length = max(q_and_a_length_list)
+    print("guagua",max_parag_length,max_q_and_a_length)
+
+    train_texts = [example for example, label in train_data]
+    train_labels = [label for quiz, label in train_data]
+    dev_texts = [quiz for quiz, label in dev_data]
+    dev_labels = [label for quiz, label in dev_data]
+
+    # build standard Pytorch Dataset object of our data
+    dataset_train = QADataset(train_texts, train_labels, parag_max_len=max_parag_length,
+                              q_and_a_max_len=max_q_and_a_length)
+    dataset_dev = QADataset(dev_texts, dev_labels, vocab=dataset_train.vocab, labels_vocab=dataset_train.labels_vocab,
+                            parag_max_len=max_parag_length, q_and_a_max_len=max_q_and_a_length)
+    return dataset_train, dataset_dev
 
 class EMA:
     """Exponential moving average of model parameters.
@@ -329,10 +396,10 @@ def load_model(model, checkpoint_path, device, return_step=True):
     ckpt_dict = torch.load(checkpoint_path, map_location=device)
 
     # Build model, load parameters
-    model.load_state_dict(ckpt_dict['model_state'])
+    model.load_state_dict(ckpt_dict)
 
-    if return_step:
-        step = ckpt_dict['step']
-        return model, step
+    # if return_step:
+    #     step = ckpt_dict['step']
+    #     return model, step
 
     return model

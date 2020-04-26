@@ -18,7 +18,7 @@ from sklearn.metrics import accuracy_score
 
 from collections import OrderedDict
 from json import dumps
-from baseline_model import BiDAF
+from selfattbidaf_model import SelfAttBiDAF
 from utils.util import get_dataset_quail,get_dataset_race
 
 from tqdm import tqdm
@@ -30,7 +30,7 @@ warnings.filterwarnings("ignore")
 def main():
     # Set up logging and devices
     root_dir = "./save/"
-    models_dir = root_dir + "baseline_on_race/"
+    models_dir = root_dir + "proposal_on_race/"
     os.mkdir(models_dir)
     # load_path = root_dir + "baseline/baseline_epoch5.pt"
     load_path = None
@@ -54,13 +54,13 @@ def main():
     drop_prob = 0.0
     embedding_size = 32
     vocab_size = len(train_dataset.vocab)
-    hidden_size = 128
+    hidden_size = 80
     lr = 0.5
     l2_wd = 0
     max_grad_norm = 5.0
 
     # Get model
-    model = BiDAF(embedding_size=embedding_size,
+    model = SelfAttBiDAF(embedding_size=embedding_size,
                   vocab_size=vocab_size,
                   hidden_size=hidden_size,
                   drop_prob=drop_prob)
@@ -129,13 +129,13 @@ def main():
 
         epoch_loss = np.mean(epoch_losses)
         print("training loss: {}".format(epoch_loss))
-        ema.assign(model)
-        #y_true_train, y_pred_train = predict(model, dataloader_train, device)
-        y_true_dev, y_pred_dev = predict(model, dataloader_dev, device)
-        ema.resume(model)
-        #acc_train = accuracy_score(y_true_train, y_pred_train)
-        acc_test = accuracy_score(y_true_dev, y_pred_dev)
-        print("dev accuracy: {0}\n".format(acc_test))
+        # ema.assign(model)
+        # #y_true_train, y_pred_train = predict(model, dataloader_train, device)
+        # y_true_dev, y_pred_dev = predict(model, dataloader_dev, device)
+        # ema.resume(model)
+        # #acc_train = accuracy_score(y_true_train, y_pred_train)
+        # acc_test = accuracy_score(y_true_dev, y_pred_dev)
+        # print("dev accuracy: {0}\n".format(acc_test))
 
         if epoch%10==0:
             save_dir = models_dir + "baseline_epoch{}.pt".format(epoch)
