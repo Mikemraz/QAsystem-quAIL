@@ -1,7 +1,3 @@
-"""Assortment of layers for use in models.py.
-Author:
-    Chris Chute (chute@stanford.edu)
-"""
 import math
 import torch
 from torch.nn import Parameter
@@ -10,6 +6,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from allennlp.modules import TimeDistributed
 
+import utils.util as util
 from utils.util import masked_softmax
 
 
@@ -18,18 +15,17 @@ class Embedding(nn.Module):
     Word-level embeddings are further refined using a 2-layer Highway Encoder
     (see `HighwayEncoder` class for details).
     Args:
-        word_vectors (torch.Tensor): Pre-trained word vectors.
+        weights_matrix (np.array): Pre-trained word vectors. In our case, GloVe is adopted.
         hidden_size (int): Size of hidden activations.
-        drop_prob (float): Probability of zero-ing out activations
     """
-    def __init__(self, embedding_size, vocab_size, hidden_size):
+    def __init__(self, weights_matrix, hidden_size):
         super().__init__()
-        self.embed = nn.Embedding(vocab_size, embedding_size)
-        self.proj = nn.Linear(embedding_size, hidden_size, bias=False)
+        self.embedding, num_embeddings, embedding_dim = util.create_emb_layer(weights_matrix, True)
+        self.proj = nn.Linear(embedding_dim, hidden_size, bias=False)
         self.hwy = HighwayEncoder(2, hidden_size)
 
     def forward(self, x):
-        emb = self.embed(x)   # (batch_size, seq_len, embed_size)
+        emb = self.embedding(x)   # (batch_size, seq_len, embed_size)
         emb = self.proj(emb)  # (batch_size, seq_len, hidden_size)
         emb = self.hwy(emb)   # (batch_size, seq_len, hidden_size)
         return emb
@@ -180,7 +176,6 @@ class TriLinearAttention(nn.Module):
     the `linear` implementation since we do not create a massive
     (batch, context_len, question_len, dim) matrix
     """
-
     def __init__(self, input_dim):
         super().__init__()
         self.input_dim = input_dim
@@ -254,17 +249,12 @@ class SelfAtt(nn.Module):
             att)  # unroll the second dimention with the first dimension, and roll it back, change of dimension.
         # non-linearity activation function
         att = F.relu(att_wrapped)  # (batch_size * c_len, 1600)
-        #         print("att", att.shape)
+
         c_mask = c_mask.unsqueeze(dim=2).float()  # (batch_size, c_len, 1)
 
         drop_att = F.dropout(att, self.drop_prob, self.training)  # (batch_size * c_len, hidden_size)
-        #         c_mask = c_mask.permute(1, 0, 2)
-        #         print(drop_att.shape, c_mask.shape)
 
         encoder, _ = self.enc(drop_att)
-        #         encoder = self.get_similarity_matrix(drop_att, c_mask)
-        #         print("encoder", encoder.shape)
-        #         encoder = encoder.unsqueeze(dim=3)
 
         self_att = self.trilinear(encoder, encoder)  # get the self attention (batch_size, c_len, c_len)
 
@@ -293,32 +283,13 @@ class SelfAtt(nn.Module):
 
 
 class BiDAFOutput(nn.Module):
-    """Output layer used by BiDAF for question answering.
-    Computes a linear transformation of the attention and modeling
-    outputs, then takes the softmax of the result to get the start pointer.
-    A bidirectional LSTM is then applied the modeling output to produce `mod_2`.
-    A second linear+softmax of the attention output and `mod_2` is used
-    to get the end pointer.
+    """Output layer.
+    uses a linear layer to map the hidden size to the number of classes.
     Args:
         hidden_size (int): Hidden size used in the BiDAF model.
-        drop_prob (float): Probability of zero-ing out activations.
+        num_cls (float): number of classes.
+    return logits
     """
-    # def __init__(self, hidden_size, parag_length=494, num_cls=4):
-    #     super(BiDAFOutput, self).__init__()
-    #     self.att_linear = nn.Linear(8 * hidden_size, 1)
-    #     self.mod_linear = nn.Linear(2 * hidden_size, 1)
-    #
-    #     self.linear = nn.Linear(parag_length, num_cls)
-    #
-    # def forward(self, att, mod):
-    #     # att Dim: (batch_size, parag_len, 8*hidden_size)
-    #     logits = self.att_linear(att) + self.mod_linear(mod) #dim(batch,parag,1)
-    #     logits = logits.squeeze() #dim(batch,parag)
-    #     logits = self.linear(logits) #dim(batch,num_cls)
-    #     #p = self.softmax(logits)
-    #
-    #     return logits
-
     def __init__(self, hidden_size, num_cls=4):
         super(BiDAFOutput, self).__init__()
         self.mod_linear = nn.Linear(hidden_size, num_cls)
@@ -327,6 +298,5 @@ class BiDAFOutput(nn.Module):
         # att Dim: (batch_size, parag_len, 8*hidden_size)
         h_n = h_n.permute(1, 0, 2)
         h_n = torch.sum(h_n,1)
-        logits = self.mod_linear(h_n) #dim(batch,num_cls)
-
+        logits = self.mod_linear(h_n)    #dim(batch,num_cls)
         return logits

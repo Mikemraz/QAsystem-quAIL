@@ -19,7 +19,8 @@ from sklearn.metrics import accuracy_score
 from collections import OrderedDict
 from json import dumps
 from selfattbidaf_model import SelfAttBiDAF
-from utils.util import get_dataset_quail,get_dataset_race
+from baseline_model import BiDAF
+from utils.util import get_dataset_quail,get_dataset_race,get_dataset_race_and_quail
 
 from tqdm import tqdm
 from ujson import load as json_load
@@ -28,12 +29,18 @@ warnings.filterwarnings("ignore")
 
 
 def main():
-    # Set up logging and devices
-    root_dir = "./save/"
-    models_dir = root_dir + "proposal_on_race/"
-    os.mkdir(models_dir)
-    # load_path = root_dir + "baseline/baseline_epoch5.pt"
+    # for experiment, we are going to try 4 setups, which are use_baseline_mode (True or False) and use_data_augmentation (True or False)
+    save_model_subdirectory = "preemd_proposal_augmentation/"
     load_path = None
+    use_baseline_model = True
+    use_data_augmentation = True
+
+    root_dir = "./save/"
+    models_dir = root_dir + save_model_subdirectory
+    if save_model_subdirectory not in os.listdir(root_dir):
+        os.mkdir(models_dir)
+    # load_path = root_dir + "baseline/baseline_epoch5.pt"
+
 
     device = torch.device("cuda:0")
     #device = torch.device("cpu")
@@ -46,13 +53,19 @@ def main():
 
     # get processed batch dataloader
     # build standard Pytorch DataLoader object of our data
-    train_dataset, dev_dataset = get_dataset_race()
+    if not use_data_augmentation:
+        train_dataset, dev_dataset = get_dataset_quail()
+    else:
+        train_dataset, dev_dataset = get_dataset_race_and_quail()
+
+    weights_matrix = train_dataset.vocab.weights_matrix
+    weights_matrix = util.transform_weight_mat(weights_matrix)
+
     dataloader_train = DataLoader(train_dataset, shuffle=True, batch_size=64)
     dataloader_dev = DataLoader(dev_dataset, shuffle=True, batch_size=64)
 
     # define model parameters
     drop_prob = 0.0
-    embedding_size = 32
     vocab_size = len(train_dataset.vocab)
     hidden_size = 80
     lr = 0.5
@@ -60,10 +73,14 @@ def main():
     max_grad_norm = 5.0
 
     # Get model
-    model = SelfAttBiDAF(embedding_size=embedding_size,
-                  vocab_size=vocab_size,
-                  hidden_size=hidden_size,
-                  drop_prob=drop_prob)
+    if use_baseline_model:
+        model = BiDAF(weights_matrix=weights_matrix,
+                      hidden_size=hidden_size,
+                      drop_prob=drop_prob)
+    else:
+        model = SelfAttBiDAF(weights_matrix=weights_matrix,
+                          hidden_size=hidden_size,
+                          drop_prob=drop_prob)
 
     if load_path:
         model.load_state_dict(torch.load(load_path))
@@ -82,22 +99,6 @@ def main():
     optimizer = optim.Adadelta(model.parameters(), lr,
                                weight_decay=l2_wd)
     scheduler = sched.LambdaLR(optimizer, lambda s: 1.)  # Constant LR
-
-    # Get data loader
-    # log.info('Building dataset...')
-    # train_dataset = SQuAD(args.train_record_file, args.use_squad_v2)
-    # train_loader = data.DataLoader(train_dataset,
-    #                                batch_size=args.batch_size,
-    #                                shuffle=True,
-    #                                num_workers=args.num_workers,
-    #                                collate_fn=collate_fn)
-    # dev_dataset = SQuAD(args.dev_record_file, args.use_squad_v2)
-    # dev_loader = data.DataLoader(dev_dataset,
-    #                              batch_size=args.batch_size,
-    #                              shuffle=False,
-    #                              num_workers=args.num_workers,
-    #                              collate_fn=collate_fn)
-
 
     epoch = step // len(train_dataset)
     while epoch != num_epochs:
@@ -129,19 +130,17 @@ def main():
 
         epoch_loss = np.mean(epoch_losses)
         print("training loss: {}".format(epoch_loss))
-        # ema.assign(model)
+        ema.assign(model)
         # #y_true_train, y_pred_train = predict(model, dataloader_train, device)
-        # y_true_dev, y_pred_dev = predict(model, dataloader_dev, device)
-        # ema.resume(model)
+        y_true_dev, y_pred_dev = predict(model, dataloader_dev, device)
+        ema.resume(model)
         # #acc_train = accuracy_score(y_true_train, y_pred_train)
-        # acc_test = accuracy_score(y_true_dev, y_pred_dev)
-        # print("dev accuracy: {0}\n".format(acc_test))
+        acc_dev = accuracy_score(y_true_dev, y_pred_dev)
+        print("dev accuracy: {0}\n".format(acc_dev))
 
         if epoch%10==0:
             save_dir = models_dir + "baseline_epoch{}.pt".format(epoch)
             torch.save(model.state_dict(), save_dir)
-
-
 
 
 def predict(model, data_loader, device):
@@ -165,9 +164,6 @@ def predict(model, data_loader, device):
     y_true = np.concatenate(y_true, axis=0)
 
     return y_true, y_pred
-
-
-
 
 if __name__ == '__main__':
     main()

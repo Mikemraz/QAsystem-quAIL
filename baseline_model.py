@@ -9,8 +9,7 @@ import torch.nn as nn
 
 
 class BiDAF(nn.Module):
-    """Baseline BiDAF model for SQuAD.
-    Based on the paper:
+    """Based on the paper:
     "Bidirectional Attention Flow for Machine Comprehension"
     by Minjoon Seo, Aniruddha Kembhavi, Ali Farhadi, Hannaneh Hajishirzi
     (https://arxiv.org/abs/1611.01603).
@@ -19,16 +18,15 @@ class BiDAF(nn.Module):
         - Encoder layer: Encode the embedded sequence.
         - Attention layer: Apply an attention mechanism to the encoded sequence.
         - Model encoder layer: Encode the sequence again.
-        - Output layer: Simple layer (e.g., fc + softmax) to get final outputs.
+        - Output layer: Simple layer to get final outputs.
     Args:
-        word_vectors (torch.Tensor): Pre-trained word vectors.
+        weights_matrix (np.array): Pre-trained word vectors. In our case, GloVe is adopted.
         hidden_size (int): Number of features in the hidden state at each layer.
         drop_prob (float): Dropout probability.
     """
-    def __init__(self, embedding_size, vocab_size, hidden_size, drop_prob=0.):
+    def __init__(self, weights_matrix, hidden_size, drop_prob=0.):
         super(BiDAF, self).__init__()
-        self.emb = layers.Embedding(embedding_size=embedding_size,
-                                    vocab_size=vocab_size,
+        self.emb = layers.Embedding(weights_matrix=weights_matrix,
                                     hidden_size=hidden_size)
 
         self.enc = layers.RNNEncoder(input_size=hidden_size,
@@ -62,8 +60,6 @@ class BiDAF(nn.Module):
 
         _, h_n = self.mod(att, c_len)        # (batch_size, c_len, 2 * hidden_size)
 
-        out = self.out(h_n)  # 2 tensors, each (batch_size, c_len)
+        out = self.out(h_n)  # 2 tensors, each (batch_size, num_cls)
 
         return out
-
-    # todos: 3. make substantial changes to train.py

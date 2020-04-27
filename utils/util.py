@@ -6,6 +6,7 @@ from nltk import word_tokenize
 import torch
 from torch.utils.data import Dataset
 import torch.nn.functional as F
+import torch.nn as nn
 
 import os
 import pickle
@@ -82,14 +83,73 @@ def process_data_race(data_path, save_file_name):
         pickle.dump(stitched_data, f)
 
 
+# class Vocabulary:
+#     def __init__(self, special_tokens=None):
+#         self.w2idx = {}
+#         self.idx2w = {}
+#         self.w2cnt = defaultdict(int)
+#         self.special_tokens = special_tokens
+#         if self.special_tokens is not None:
+#             self.add_tokens(special_tokens)
+#
+#     def add_tokens(self, tokens):
+#         for token in tokens:
+#             self.add_token(token)
+#             self.w2cnt[token] += 1
+#
+#     def add_token(self, token):
+#         if token not in self.w2idx:
+#             cur_len = len(self)
+#             self.w2idx[token] = cur_len
+#             self.idx2w[cur_len] = token
+#
+#     def prune(self, min_cnt=2):
+#         to_remove = set([token for token in self.w2idx if self.w2cnt[token] < min_cnt])
+#         if self.special_tokens is not None:
+#             to_remove = to_remove.difference(set(self.special_tokens))
+#         for token in to_remove:
+#             self.w2cnt.pop(token)
+#         self.w2idx = {token: idx for idx, token in enumerate(self.w2cnt.keys())}
+#         self.idx2w = {idx: token for token, idx in self.w2idx.items()}
+#
+#     def __contains__(self, item):
+#         return item in self.w2idx
+#
+#     def __getitem__(self, item):
+#         if isinstance(item, str):
+#             return self.w2idx[item]
+#         elif isinstance(item, int):
+#             return self.idx2w[item]
+#         else:
+#             raise TypeError("Supported indices are int and str")
+#
+#     def __len__(self):
+#         return (len(self.w2idx))
+
+
 class Vocabulary:
-    def __init__(self, special_tokens=None):
+    def __init__(self, special_tokens=None, glove_path='./data/glove.6B.50d.txt'):
+        self.weights_matrix = {}
+        self.glove_path = glove_path
+        self.glove_dict = self.make_glove_dict()
         self.w2idx = {}
         self.idx2w = {}
         self.w2cnt = defaultdict(int)
         self.special_tokens = special_tokens
         if self.special_tokens is not None:
             self.add_tokens(special_tokens)
+
+    def make_glove_dict(self):
+        print("Loading Glove Model")
+        f = open(self.glove_path, 'r', encoding='utf-8')
+        glove_dict = {}
+        for line in f:
+            splitLine = line.split()
+            word = splitLine[0]
+            embedding = np.array([float(val) for val in splitLine[1:]])
+            glove_dict[word] = embedding
+        print("Done.", len(glove_dict), " words loaded!")
+        return glove_dict
 
     def add_tokens(self, tokens):
         for token in tokens:
@@ -101,6 +161,10 @@ class Vocabulary:
             cur_len = len(self)
             self.w2idx[token] = cur_len
             self.idx2w[cur_len] = token
+            if token in self.glove_dict:
+                self.weights_matrix[cur_len] = self.glove_dict[token]
+            else:
+                self.weights_matrix[cur_len] = np.random.normal(scale=0.6,size=(50,))
 
     def prune(self, min_cnt=2):
         to_remove = set([token for token in self.w2idx if self.w2cnt[token] < min_cnt])
@@ -125,6 +189,24 @@ class Vocabulary:
     def __len__(self):
         return (len(self.w2idx))
 
+
+def transform_weight_mat(weights_matrix):
+    # transform the format of weight matrix from dictionary to numpy array.
+    voc_len = len(weights_matrix)
+    new_weights_matrix = np.zeros((voc_len, 50))
+    for i in range(voc_len):
+        new_weights_matrix[i] = weights_matrix[i]
+    return new_weights_matrix
+
+
+def create_emb_layer(weights_matrix, non_trainable=False):
+    num_embeddings, embedding_dim = weights_matrix.shape
+    emb_layer = nn.Embedding(num_embeddings, embedding_dim)
+    weights_matrix = torch.from_numpy(weights_matrix).type(torch.float32)
+    emb_layer.load_state_dict({'weight': weights_matrix})
+    if non_trainable:
+        emb_layer.weight.requires_grad = False
+    return emb_layer, num_embeddings, embedding_dim
 
 class QADataset(Dataset):
     def __init__(self, texts, labels, vocab=None, labels_vocab=None, parag_max_len=40, q_and_a_max_len=40, lowercase=True):
@@ -235,7 +317,7 @@ def torch_from_json(path, dtype=torch.float32):
     Returns:
         tensor (torch.Tensor): Tensor loaded from JSON file.
     """
-    with open(path, 'r') as fh:
+    with open(path, 'r',encoding="utf8") as fh:
         array = np.array(json.load(fh))
 
     tensor = torch.from_numpy(array).type(dtype)
@@ -286,6 +368,7 @@ def get_dataset_quail():
     max_parag_length = max(parag_length_list)
     q_and_a_length_list = [len(example[1]) for example, label in train_data]
     max_q_and_a_length = max(q_and_a_length_list)
+    print("guagua", max_parag_length, max_q_and_a_length)
 
     train_texts = [example for example, label in train_data]
     train_labels = [label for quiz, label in train_data]
@@ -325,6 +408,48 @@ def get_dataset_race():
     train_labels = [label for quiz, label in train_data]
     dev_texts = [quiz for quiz, label in dev_data]
     dev_labels = [label for quiz, label in dev_data]
+
+    # build standard Pytorch Dataset object of our data
+    dataset_train = QADataset(train_texts, train_labels, parag_max_len=max_parag_length,
+                              q_and_a_max_len=max_q_and_a_length)
+    dataset_dev = QADataset(dev_texts, dev_labels, vocab=dataset_train.vocab, labels_vocab=dataset_train.labels_vocab,
+                            parag_max_len=max_parag_length, q_and_a_max_len=max_q_and_a_length)
+    return dataset_train, dataset_dev
+
+def get_dataset_race_and_quail():
+    # this function is used for data augmentation
+    train_processed_data_file_name_race = 'train_processed_data_race.txt'
+    f_list = os.listdir()
+    with open(train_processed_data_file_name_race, 'rb') as f:
+        train_data_race = pickle.load(f)
+
+    train_processed_data_file_name_quail = 'train_processed_data.txt'
+    f_list = os.listdir()
+    with open(train_processed_data_file_name_quail, 'rb') as f:
+        train_data_quail = pickle.load(f)
+
+    dev_processed_data_file_name_quail = 'dev_processed_data.txt'
+    with open(dev_processed_data_file_name_quail, 'rb') as f:
+        dev_data_quail = pickle.load(f)
+
+    parag_length_list = [len(example[0]) for example, label in train_data_race]
+    max_parag_length_race = max(parag_length_list)
+    parag_length_list = [len(example[0]) for example, label in train_data_quail]
+    max_parag_length_quail = max(parag_length_list)
+    max_parag_length = max(max_parag_length_race, max_parag_length_quail)
+
+    q_and_a_length_list_race = [len(example[1]) for example, label in train_data_race]
+    max_q_and_a_length_race = max(q_and_a_length_list_race)
+    q_and_a_length_list_quail = [len(example[1]) for example, label in train_data_quail]
+    max_q_and_a_length_quail = max(q_and_a_length_list_quail)
+    max_q_and_a_length = max(max_q_and_a_length_race, max_q_and_a_length_quail)
+
+    print("max paragraph length and max q_and_a length: ",max_parag_length,max_q_and_a_length)
+
+    train_texts = [example for example, label in train_data_race] + [example for example, label in train_data_quail]
+    train_labels = [label for quiz, label in train_data_race] + [label for quiz, label in train_data_quail]
+    dev_texts = [quiz for quiz, label in dev_data_quail]
+    dev_labels = [label for quiz, label in dev_data_quail]
 
     # build standard Pytorch Dataset object of our data
     dataset_train = QADataset(train_texts, train_labels, parag_max_len=max_parag_length,
