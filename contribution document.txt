@@ -1,0 +1,19 @@
+This project is entirely developed by Ariel and Liming even though some parts of it may be borrowed from others. The code was implemented using the live share option of Visual Studio, 
+so we only need to set up one enviroment in only one of our computers. We have borrowed the code from the starter code of Stanford's NLP final project: https://github.com/minggg/squad.git. 
+And the implementation self-attention layer by Gendong Zhang: https://github.com/Oceanland-428/Improved-BiDAF-with-Self-Attention#overview.
+
+The code entirely written by us are:
+1. many help functions and classes in utils/util.py
+2. preprocessing/remake_dev_key.py
+3. train_proposal.py
+
+The code is not entirely written by us but we made substantial modifications:
+1. layers.py
+2. baseline_model.py
+3. selfattbidaf_model.py (this model file is built based on baseline_model.py in addition with a self-attention layer.)   
+it is very hard to explicitly tell which part of code is original. We made substantial changes to the original implementation of Stanford's starter code. Please refer to the history of our commit.
+
+The link to our project repository: https://github.com/Mikemraz/QAsystem-quAIL
+
+
+
